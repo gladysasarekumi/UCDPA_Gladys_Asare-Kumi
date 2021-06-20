@@ -195,6 +195,19 @@ def tune_hyperparameters(X_train, y_train, X_test, y_test):
     # return the best set of hyperparameters to use
     return hypscores[besthyp], ParameterGrid(hypdict)[besthyp]
 
+def remove_us_bank_holidays(df, colname, datecolname):
+    # coerce all values in colname to numerical. This will set any occurrence of non-numeric data to NaN
+    df[colname] = pd.to_numeric(df[colname], errors='coerce')
+    missing_data_rows = df[df.isnull().any(axis=1)]  # Get the rows with missing data
+    caldr = USFederalHolidayCalendar()  # Get US Federal Holiday calendar
+    # Filter the calendar caldr to keep only those federal holidays within the data timeframe
+    hols = caldr.holidays(start=min(df[datecolname]).date(), end=max(df[datecolname]).date())
+    # Create a filter variable of all the NaNs with dates included the filtered calendar caldr
+    subset = missing_data_rows[missing_data_rows[datecolname].isin(hols)][datecolname]
+    # Subset our data to only include those rows with dates not included in the calendar caldr
+    df = df[-df[datecolname].isin(subset)]
+    return df
+
 
 
 # A: Import the data to be used
@@ -205,8 +218,8 @@ sp500_index = pd.DataFrame(pd.read_csv("C:/Users/Gladys/Desktop/Data Science/Pro
 # Import S&P500 constituents historical price data
 sp500_df = pd.DataFrame(pd.read_csv("C:/Users/Gladys/Desktop/Data Science/Project/Data/all_stocks_5yr.csv"))
 
-# Import Effective Federal Funds Rate data (this will be used as the risk free rate)
-ffr_df = pd.DataFrame(pd.read_csv("C:/Users/Gladys/Desktop/Data Science/Project/Data/DFF.csv"))
+# Import Daily 3-Month Treasury Bill Rate data (this will be used as the risk free rate)
+rfr_df = pd.DataFrame(pd.read_csv("C:/Users/Gladys/Desktop/Data Science/Project/Data/DTB3.csv", parse_dates=['DATE']))
 
 # Import ESG Rating data file
 esg_rat = pd.DataFrame(pd.read_csv("C:/Users/Gladys/Desktop/Data Science/Project/Data/ESGOverallRating.csv"))
@@ -220,32 +233,20 @@ esg_rat.index = pd.to_datetime(esg_rat['IVA_RATING_DATE'])
 esg_rat.sort_index(inplace=True)
 esg_rat.drop_duplicates(subset=['ISSUER_TICKER'], keep='last', inplace=True)
 
+
 # B2: Prepare S&P500 index data
 # Check for missing values
-sp500_index.isnull().sum()  # Count the total number of NaNs...Appears to have no missing values
+print(sp500_index.isnull().sum())  # Count the total number of NaNs...Appears to have no missing values
 
-# To be sure there are no non_numeric values, coerce all values in the SP500 column to numerical. This will set
-# any occurrence of non-numeric data to NaN
-sp500_index['SP500'] = pd.to_numeric(sp500_index['SP500'], errors='coerce')
+# To be sure there are no non_numeric values, apply the remove_us_bank_holidays function to the dataframe. This function
+# will convert all non-numeric values to NaN and then remove those NaNs that are a result of missing data due to a
+# US bank holiday with US financial markets closed
+sp500_index = remove_us_bank_holidays(sp500_index, 'SP500', 'DATE')
 
-# Check again for missing values
-sp500_index.isnull().sum()  # Now it returns a count of missing data
-
-# Get the rows with missing data
-missing_data_rows = sp500_index[sp500_index.isnull().any(axis=1)]
-
-# Scanning through bad_data_rows, I suspect the rows are US bank holidays so I will check to the US Federal Holiday
-# Calendar to be sure
-caldr = USFederalHolidayCalendar()  # initialize the calendar variable and set it to the US Federal Holiday Calendar
-
-# Import US bank holidays between the min and max dates in the S&P500 index data
-hols = caldr.holidays(start=min(sp500_index['DATE']).date(), end=max(sp500_index['DATE']).date())
-
-# Check which of the missing data row dates are not a US bank holiday
-print(len(missing_data_rows[missing_data_rows.SP500.isin(hols)]))  # Returns 0 => all missing data are US bank holidays
-
-# Remove the missing rows as we can be sure they are all bank holidays when there was no stock market trading
-sp500_index = sp500_index.dropna()
+# Check for missing values again and if there are any, they are missing not because there was no stock market trading so
+# I will fill those missing values with the last observed value using fillna with ffill
+if sp500_index['SP500'].isnull().sum() > 0:
+    sp500_index.fillna(method='ffill')
 
 # Set date column as the index
 sp500_index.set_index('DATE',  inplace=True)
@@ -258,6 +259,7 @@ sp500_index.index = pd.to_datetime(sp500_index.index, format="%Y%m").to_period('
 
 # Calculate returns
 sp500_index_monthly_returns = sp500_index.pct_change().dropna()
+
 
 
 # B4: Prepare S&P500 constituents historical price data
@@ -327,29 +329,40 @@ sp500_monthlyreturns = sp500monthly_df.pct_change().dropna()  # Monthly returns
 sp500esg_monthlyreturns = sp500esgmonthly_df.pct_change().dropna()  # ESG Monthly returns
 
 
-# B5: Prepare the Effective federal funds rate data
+# B5: Prepare the Daily 3-month Treasury Bill rate data
 
-# First, create a month/year column to use for grouping the data to average the rates monthly
-ffr_df['Month&Year'] = pd.to_datetime(ffr_df['DATE']).dt.strftime('%B-%Y')  # Create a month/year column
+# Check for missing values
+print(rfr_df.isnull().sum())
+
+# Remove bank holidays
+rfr_df = remove_us_bank_holidays(rfr_df, 'DTB3', 'DATE')
+
+# Forward fill remaining missing values
+if rfr_df['DTB3'].isnull().sum() > 0:
+    rfr_df.fillna(method='ffill')
+
+
+# Create a month/year column to use for grouping the data to average the rates monthly
+rfr_df['Month&Year'] = pd.to_datetime(rfr_df['DATE']).dt.strftime('%B-%Y')  # Create a month/year column
 
 # Calculate the average rate for each month from the daily rates
-temp_ffr = ffr_df.groupby(pd.to_datetime(ffr_df['DATE']).dt.strftime('%B-%Y')).agg('mean')
+temp_rfr = rfr_df.groupby(pd.to_datetime(rfr_df['DATE']).dt.strftime('%B-%Y')).agg('mean')
 
 # Join the calculated monthly average rate with the original daily data
-ffr_df = ffr_df.join(temp_ffr, on='Month&Year', how='inner', rsuffix='Avg')
+rfr_df = rfr_df.join(temp_rfr, on='Month&Year', how='inner', rsuffix='Avg')
 
 # Set the DATE column as the index
-ffr_df.set_index('DATE',  inplace=True)
+rfr_df.set_index('DATE', inplace=True)
 
 # Change the index to a datetime dtype
-ffr_df.index = pd.to_datetime(ffr_df.index)
+rfr_df.index = pd.to_datetime(rfr_df.index)
 
 # Resample the data to get monthly data
-ffr_df_mth_avg = ffr_df.resample('BMS').first()
+rfr_df_mth_avg = rfr_df.resample('BMS').first()
 
 # Convert the date index to show format mm-yyyy
-ffr_df_mth_avg.index = pd.to_datetime(ffr_df_mth_avg.index, format="%Y%m").to_period('M')
-ffr_df_mth_avg = ffr_df_mth_avg['DFFAvg']  # Rename the Average monthly rate column
+rfr_df_mth_avg.index = pd.to_datetime(rfr_df_mth_avg.index, format="%Y%m").to_period('M')
+rfr_df_mth_avg = rfr_df_mth_avg['DTB3Avg']  # Keep only the Average monthly rate column
 
 
 
@@ -369,7 +382,7 @@ x = len(sp500_monthlyreturns.columns)  # get number of stocks in monthly returns
 for y in sp500_cov:
     covariance = y[1]
     ret_temp, vol_temp, wts_temp = [], [], []
-    rfr = ffr_df_mth_avg[ffr_df_mth_avg.index.strftime('%Y-%m') == str(y[0])][0]
+    rfr = rfr_df_mth_avg[rfr_df_mth_avg.index.strftime('%Y-%m') == str(y[0])][0]
     for portfolio in range(10):  # run 10 simulations of the portfolio
         wts = np.random.random(x)  # generate random weights for each security in the portfolio
         wts = wts/np.sum(wts)  # normalize so all weights sum to 1
@@ -377,7 +390,7 @@ for y in sp500_cov:
         returns = returns.reshape(wts.shape)
         ret = np.dot(wts, returns) # calculate the return of the portfolio
         # calculate the monthly volatility of the portfolio
-        vol = np.sqrt(np.dot(wts.T, np.dot(covariance, wts)))*np.sqrt(21) # multiplied by sqrt(21) to convert fro daily to monthly
+        vol = np.sqrt(np.dot(wts.T, np.dot(covariance, wts)))  # *np.sqrt(21) multiplied by sqrt(21) to convert from daily to monthly
         ret_temp.append(ret)
         vol_temp.append(vol)
         wts_temp.append(wts)
@@ -396,7 +409,7 @@ x = len(sp500esg_monthlyreturns.columns)  # get number of stocks in monthly retu
 for y in sp500esg_cov:
     covariance = y[1]
     ret_temp, vol_temp, wts_temp = [], [], []
-    rfr = ffr_df_mth_avg[ffr_df_mth_avg.index.strftime('%Y-%m') == str(y[0])][0]
+    rfr = rfr_df_mth_avg[rfr_df_mth_avg.index.strftime('%Y-%m') == str(y[0])][0]
     for portfolio in range(10):  # run 10 simulations of the portfolio
         wts = np.random.random(x)  # generate random weights for each security in the portfolio
         wts = wts/np.sum(wts)  # normalize so all weights sum to 1
@@ -404,7 +417,7 @@ for y in sp500esg_cov:
         returns = returns.reshape(wts.shape)
         ret = np.dot(wts, returns) # calculate the return of the portfolio
         # calculate the monthly volatility of the portfolio
-        vol = np.sqrt(np.dot(wts.T, np.dot(covariance, wts)))*np.sqrt(21) # multiplied by sqrt(21) to convert fro daily to monthly
+        vol = np.sqrt(np.dot(wts.T, np.dot(covariance, wts))) # *np.sqrt(21) multiplied by sqrt(21) to convert fro daily to monthly
         ret_temp.append(ret)
         vol_temp.append(vol)
         wts_temp.append(wts)
