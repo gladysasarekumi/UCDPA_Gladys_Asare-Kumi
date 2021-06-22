@@ -3,15 +3,14 @@
 # Import the necessary modules
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor
 # import the below functions and variables from main.py
-from main import sp500_monthlyreturns, sp500esg_monthlyreturns, sp500_index_monthly_returns, sp500_cov, sp500esg_cov, \
+from Analysis import sp500_monthlyreturns, sp500esg_monthlyreturns, sp500_index_monthly_returns, sp500_cov, sp500esg_cov, \
     rfr_df_mth_avg, test_features_df, train_features_df, train_features_esg_df, test_features_esg_df, test_features, \
     train_features, test_features_esg, train_features_esg, get_target, calculate_hypothetical_portfolio_returns, \
     get_sharpe, random_forest, besthyp, esg_besthyp
 
 
-# Define functions used
+# Define functions to be used
 def perm_reps_mean_diff(x1, x2, size=1):
     """Generates permutation replicates and computes the differences of the sample means
     Args:
@@ -40,7 +39,7 @@ def perm_reps_mean_diff(x1, x2, size=1):
 esg_returns = []  # initialize list to hold the hypothetical portfolio returns for the ESG_filtered data
 nonesg_returns = []  # initialize list to hold the hypothetical portfolio returns for the non-ESG_filtered data
 
-for f in range(5):  # run 5 simulations of the hypothetical portfolio to be used in the hypothesis test
+for f in range(10):  # run 10 simulations of the hypothetical portfolio to be used in the hypothesis test
 
     # Calculate portfolio returns and volatility for each date for the non-ESG filtered data
     test_ret_vol = []  # initialize empty list to hold the portfolio returns and volatility
@@ -100,13 +99,13 @@ for f in range(5):  # run 5 simulations of the hypothetical portfolio to be used
         rdm_wt_port_weights_esg.append([y[0], wts_temp])
 
 
-    # C3: Sharpe ratios and max Sharpe ratios
+    # Sharpe ratios and max Sharpe ratios
     # Calculate the sharpe ratios for each simulated portfolio and get the index of the highest sharpe ratio for each date
     rdm_wt_max_sharpe_indx = get_sharpe(test_ret_vol, rfr_list)
     rdm_wt_max_sharpe_indx_esg = get_sharpe(rdm_wt_port_ret_vol_esg, rfr_list)
 
 
-    # D3: Prepare the target
+    # Prepare the target
     # Prepare the targets i.e. Portfolio weights
     # Call function get_target to compute the weights of the max sharpe index for each date in the dataset
     train_target, train_target_with_dates = get_target(list(train_features_df.index), rdm_wt_max_sharpe_indx, test_port_weights)
@@ -126,7 +125,7 @@ for f in range(5):  # run 5 simulations of the hypothetical portfolio to be used
     test_target_esg_with_dates = test_target_esg_with_dates[int(len(test_target_esg_with_dates)/2):]
 
 
-    # 1. set the date as the index and compute the expected returns
+    # Set the date as the index and compute the expected returns
     train_target_df = pd.DataFrame(train_target_with_dates, columns=['Date', 'Weights']).set_index('Date')
     test_target_df = pd.DataFrame(test_target_with_dates,  columns=['Date', 'Weights']).set_index('Date')
     train_target_esg_df = pd.DataFrame(train_target_esg_with_dates, columns=['Date', 'Weights']).set_index('Date')
@@ -150,9 +149,6 @@ for f in range(5):  # run 5 simulations of the hypothetical portfolio to be used
                                                                                     esg_besthyp['max_features'],
                                                                                     esg_besthyp['random_state'])
 
-
-    # D8: PREDICTIONS
-
     # Get the test set portion of the monthly returns dataset
     monthly_returns_test_data = sp500_monthlyreturns[sp500_monthlyreturns.index.isin(test_target_df.index)]
     monthly_returns_test_data_esg = sp500esg_monthlyreturns[sp500esg_monthlyreturns.index.isin(test_target_esg_df.index)]
@@ -171,7 +167,7 @@ for f in range(5):  # run 5 simulations of the hypothetical portfolio to be used
     monthly_returns_sp500_index.index = monthly_returns_sp500_index.index.astype('<M8[ns]')
 
 
-    # D9: Benchmark predicted returns to view model performance
+    # Benchmark predicted returns to view model performance
 
     # set both portfolios starting amounts to 10000 and calculate total returns over the period
     amount = 10000
@@ -187,25 +183,26 @@ for f in range(5):  # run 5 simulations of the hypothetical portfolio to be used
 esg_returns.append(randomforest_total_returns_esg)
 nonesg_returns.append(randomforest_total_returns)
 
+# Convert data to numpy arrays to be used in hypothesis test
+esg_returns = np.array(esg_returns)
+nonesg_returns = np.array(nonesg_returns)
 
-# HYPOTHESIS TESTING
+
+# HYPOTHESIS TEST
 
 # Define null hypothesis:
 np.mean(esg_returns)-np.mean(nonesg_returns) == 0
 
-# Convert data to numpy arrays
-esg_returns = np.array(esg_returns)
-nonesg_returns = np.array(nonesg_returns)
-
-# Call differences between the observed means of the ESG-filtered and non-ESG-filtered data
+# Calculate the difference between the observed means of the ESG-filtered and non-ESG-filtered data
 mean_diffs_from_runs = np.mean(esg_returns) - np.mean(nonesg_returns)
 
-# Call function perm_reps to compute the mean on 1000 permutation replicates of the returns data
+# Call function perm_reps_mean_diff to compute the mean on 1000 permutation replicates of the returns data
 perm_rep = perm_reps_mean_diff(esg_returns, nonesg_returns, size=1000)
 
-# Compute p-value: p
+# Compute p-value
 p_value = np.sum(perm_rep >= mean_diffs_from_runs)/len(perm_rep)
 
+# Interprete the results
 if p_value > 0.05:
     print('p-value = ' + str(p_value) + ': The null hypothesis that the mean total portfolio returns from the non-ESG-filtered data '
     'is equal to the mean total returns of the ESG-filtered data is not rejected at the 5% significance level')
